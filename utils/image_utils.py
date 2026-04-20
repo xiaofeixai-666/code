@@ -6,8 +6,8 @@
 
 import io
 import base64
-from typing import Optional
-from PIL import Image
+from typing import Optional, Tuple
+from PIL import Image, ImageDraw, ImageFont
 
 
 def encode_image_to_base64(
@@ -99,3 +99,71 @@ def encode_image_url(image: Image.Image, image_format: str = "PNG") -> str:
         ... }
     """
     return encode_image_to_base64(image, image_format, include_data_prefix=True)
+
+
+def create_coordinate_grid_overlay(
+    image: Image.Image,
+    step: int = 100,
+    line_color: Tuple[int, int, int, int] = (0, 255, 255, 96),
+    label_color: Tuple[int, int, int, int] = (255, 255, 255, 255),
+    label_bg_color: Tuple[int, int, int, int] = (0, 0, 0, 168)
+) -> Image.Image:
+    """
+    Create a coordinate grid overlay for a screenshot.
+
+    The grid labels are expressed in normalized [0, 1000] coordinates so the
+    vision model can estimate click locations more reliably.
+    """
+    if step <= 0 or step > 1000:
+        raise ValueError("step must be in range (0, 1000]")
+
+    base = image.convert("RGBA")
+    overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    font = ImageFont.load_default()
+    width, height = base.size
+
+    def _draw_label(position: Tuple[int, int], text: str) -> None:
+        bbox = draw.textbbox(position, text, font=font)
+        padded_box = (
+            bbox[0] - 2,
+            bbox[1] - 1,
+            bbox[2] + 2,
+            bbox[3] + 1
+        )
+        draw.rectangle(padded_box, fill=label_bg_color)
+        draw.text(position, text, fill=label_color, font=font)
+
+    # Vertical grid lines and x-axis labels.
+    for value in range(0, 1001, step):
+        x = round((value / 1000) * (width - 1))
+        draw.line((x, 0, x, height - 1), fill=line_color, width=1)
+
+        label_x = min(max(2, x + 2), max(2, width - 34))
+        _draw_label((label_x, 2), f"x{value}")
+
+    # Horizontal grid lines and y-axis labels.
+    for value in range(0, 1001, step):
+        y = round((value / 1000) * (height - 1))
+        draw.line((0, y, width - 1, y), fill=line_color, width=1)
+
+        label_y = min(max(2, y + 2), max(2, height - 14))
+        _draw_label((2, label_y), f"y{value}")
+
+    # Emphasize the center point to anchor rough estimation.
+    center_x = round((500 / 1000) * (width - 1))
+    center_y = round((500 / 1000) * (height - 1))
+    radius = max(3, min(width, height) // 80)
+    draw.ellipse(
+        (
+            center_x - radius,
+            center_y - radius,
+            center_x + radius,
+            center_y + radius
+        ),
+        outline=(255, 64, 64, 220),
+        width=2
+    )
+    _draw_label((min(center_x + 6, max(2, width - 48)), min(center_y + 6, max(2, height - 14))), "500,500")
+
+    return Image.alpha_composite(base, overlay).convert("RGB")
